@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -182,7 +185,12 @@ def iter_files(folder: Path, recursive: bool) -> list[Path]:
     return files
 
 
-def organize(folder: Path, recursive: bool = False, dry_run: bool = False) -> int:
+def organize(
+    folder: Path,
+    recursive: bool = False,
+    dry_run: bool = False,
+    log: Callable[[str], None] = print,
+) -> int:
     """Move files into category folders and return the number of moved files."""
     moved = 0
 
@@ -193,18 +201,166 @@ def organize(folder: Path, recursive: bool = False, dry_run: bool = False) -> in
 
         # Dry run mode prints the planned move without changing any files.
         if dry_run:
-            print(f"Would move: {file_path} -> {destination}")
+            log(f"Would move: {file_path} -> {destination}")
         else:
             # Create the category folder if it does not already exist.
             target_folder.mkdir(exist_ok=True)
 
             # shutil.move works across folders and drives.
             shutil.move(str(file_path), str(destination))
-            print(f"Moved: {file_path} -> {destination}")
+            log(f"Moved: {file_path} -> {destination}")
 
         moved += 1
 
     return moved
+
+
+def common_folders() -> list[str]:
+    """Return useful folder choices for the GUI dropdown."""
+    home = Path.home()
+    candidates = [
+        Path.cwd(),
+        home / "Downloads",
+        home / "Documents",
+        home / "Desktop",
+        home / "Pictures",
+        home / "Videos",
+        home / "Music",
+    ]
+
+    # Keep only folders that exist, preserving order and avoiding duplicates.
+    choices: list[str] = []
+    seen: set[Path] = set()
+    for folder in candidates:
+        resolved = folder.expanduser().resolve()
+        if resolved.exists() and resolved.is_dir() and resolved not in seen:
+            choices.append(str(resolved))
+            seen.add(resolved)
+
+    return choices
+
+
+def launch_gui() -> None:
+    """Open a small desktop GUI for choosing and organizing a folder."""
+    root = tk.Tk()
+    root.title("Folder Organizer")
+    root.geometry("820x620")
+    root.minsize(700, 520)
+
+    folder_choices = common_folders()
+    selected_folder = tk.StringVar(value=folder_choices[0] if folder_choices else str(Path.cwd()))
+    dry_run_var = tk.BooleanVar(value=True)
+    recursive_var = tk.BooleanVar(value=False)
+
+    root.columnconfigure(0, weight=1)
+    root.rowconfigure(4, weight=1)
+
+    title = ttk.Label(root, text="Folder Organizer", font=("Segoe UI", 18, "bold"))
+    title.grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
+
+    instructions = (
+        "1. Choose a folder from the dropdown, or click Browse to pick another folder.\n"
+        "2. Leave Dry run checked first to preview where files will go without moving them.\n"
+        "3. Click Organize Folder and review the results below.\n"
+        "4. If the preview looks right, uncheck Dry run and click Organize Folder again.\n"
+        "5. Check Include nested folders only if you want to scan folders inside the selected folder too."
+    )
+    instructions_label = ttk.Label(root, text=instructions, justify="left")
+    instructions_label.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 14))
+
+    folder_frame = ttk.Frame(root)
+    folder_frame.grid(row=2, column=0, sticky="ew", padx=18, pady=4)
+    folder_frame.columnconfigure(1, weight=1)
+
+    ttk.Label(folder_frame, text="Folder:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+    folder_combo = ttk.Combobox(
+        folder_frame,
+        textvariable=selected_folder,
+        values=folder_choices,
+        state="normal",
+    )
+    folder_combo.grid(row=0, column=1, sticky="ew")
+
+    def browse_folder() -> None:
+        chosen = filedialog.askdirectory(title="Choose a folder to organize")
+        if not chosen:
+            return
+
+        selected_folder.set(chosen)
+        current_values = list(folder_combo["values"])
+        if chosen not in current_values:
+            folder_combo["values"] = [chosen, *current_values]
+
+    ttk.Button(folder_frame, text="Browse...", command=browse_folder).grid(
+        row=0, column=2, sticky="e", padx=(8, 0)
+    )
+
+    options_frame = ttk.Frame(root)
+    options_frame.grid(row=3, column=0, sticky="ew", padx=18, pady=8)
+
+    ttk.Checkbutton(options_frame, text="Dry run first", variable=dry_run_var).grid(
+        row=0, column=0, sticky="w", padx=(0, 18)
+    )
+    ttk.Checkbutton(
+        options_frame,
+        text="Include nested folders",
+        variable=recursive_var,
+    ).grid(row=0, column=1, sticky="w")
+
+    output = scrolledtext.ScrolledText(root, wrap="word", height=18)
+    output.grid(row=4, column=0, sticky="nsew", padx=18, pady=(4, 12))
+    output.insert("end", "Results will appear here after you click Organize Folder.\n")
+    output.configure(state="disabled")
+
+    button_frame = ttk.Frame(root)
+    button_frame.grid(row=5, column=0, sticky="ew", padx=18, pady=(0, 16))
+    button_frame.columnconfigure(0, weight=1)
+
+    def write_output(message: str) -> None:
+        output.configure(state="normal")
+        output.insert("end", message + "\n")
+        output.see("end")
+        output.configure(state="disabled")
+
+    def clear_output() -> None:
+        output.configure(state="normal")
+        output.delete("1.0", "end")
+        output.configure(state="disabled")
+
+    def run_organizer() -> None:
+        folder = Path(selected_folder.get()).expanduser().resolve()
+
+        if not folder.exists() or not folder.is_dir():
+            messagebox.showerror("Invalid folder", f"Please choose a valid folder:\n{folder}")
+            return
+
+        clear_output()
+        try:
+            moved = organize(
+                folder,
+                recursive=recursive_var.get(),
+                dry_run=dry_run_var.get(),
+                log=write_output,
+            )
+        except OSError as error:
+            messagebox.showerror("Organizer error", str(error))
+            write_output(f"Error: {error}")
+            return
+
+        action = "Would move" if dry_run_var.get() else "Moved"
+        write_output("")
+        write_output(f"{action} {moved} file(s).")
+
+        if dry_run_var.get():
+            write_output("Dry run was enabled, so no files were changed.")
+        else:
+            write_output("Organization complete.")
+
+    ttk.Button(button_frame, text="Organize Folder", command=run_organizer).grid(
+        row=0, column=1, sticky="e"
+    )
+
+    root.mainloop()
 
 
 def parse_args() -> argparse.Namespace:
@@ -229,11 +385,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Preview changes without moving files.",
     )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Open the graphical folder organizer.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    if args.gui:
+        launch_gui()
+        return
 
     # Convert the user-provided folder into a full absolute path.
     # expanduser() supports paths like "~/Downloads".
