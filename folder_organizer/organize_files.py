@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, ttk
 from collections.abc import Callable
 from pathlib import Path
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 
 # Each key is the name of the folder that files will be moved into.
@@ -241,45 +242,107 @@ def common_folders() -> list[str]:
 
 
 def launch_gui() -> None:
-    """Open a small desktop GUI for choosing and organizing a folder."""
+    """Open a polished desktop GUI for choosing and organizing a folder."""
     root = tk.Tk()
     root.title("Folder Organizer")
-    root.geometry("820x620")
-    root.minsize(700, 520)
+    root.geometry("900x680")
+    root.minsize(760, 560)
+    root.configure(bg="#f4f7fb")
+
+    style = ttk.Style(root)
+    style.theme_use("clam")
+    style.configure(".", font=("Segoe UI", 10), background="#f4f7fb", foreground="#1f2937")
+    style.configure("App.TFrame", background="#f4f7fb")
+    style.configure("Panel.TFrame", background="#ffffff", relief="flat")
+    style.configure("Header.TFrame", background="#26364d")
+    style.configure(
+        "Title.TLabel",
+        background="#26364d",
+        foreground="#ffffff",
+        font=("Segoe UI", 22, "bold"),
+    )
+    style.configure(
+        "Subtitle.TLabel",
+        background="#26364d",
+        foreground="#dbeafe",
+        font=("Segoe UI", 10),
+    )
+    style.configure(
+        "PanelTitle.TLabel",
+        background="#ffffff",
+        foreground="#111827",
+        font=("Segoe UI", 12, "bold"),
+    )
+    style.configure("Muted.TLabel", background="#ffffff", foreground="#64748b")
+    style.configure("Status.TLabel", background="#f4f7fb", foreground="#475569")
+    style.configure("TCheckbutton", background="#ffffff", foreground="#1f2937")
+    style.configure("TCombobox", fieldbackground="#ffffff", background="#ffffff")
+    style.configure(
+        "Primary.TButton",
+        background="#2563eb",
+        foreground="#ffffff",
+        borderwidth=0,
+        focusthickness=0,
+        padding=(18, 10),
+        font=("Segoe UI", 10, "bold"),
+    )
+    style.map(
+        "Primary.TButton",
+        background=[("active", "#1d4ed8"), ("pressed", "#1e40af")],
+        foreground=[("disabled", "#e5e7eb")],
+    )
+    style.configure("Secondary.TButton", padding=(14, 8), background="#e2e8f0")
+    style.map("Secondary.TButton", background=[("active", "#cbd5e1"), ("pressed", "#94a3b8")])
 
     folder_choices = common_folders()
     selected_folder = tk.StringVar(value=folder_choices[0] if folder_choices else str(Path.cwd()))
     dry_run_var = tk.BooleanVar(value=True)
     recursive_var = tk.BooleanVar(value=False)
+    status_var = tk.StringVar(value="Ready. Choose a folder and preview the changes first.")
 
     root.columnconfigure(0, weight=1)
-    root.rowconfigure(4, weight=1)
+    root.rowconfigure(2, weight=1)
 
-    title = ttk.Label(root, text="Folder Organizer", font=("Segoe UI", 18, "bold"))
-    title.grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
+    header = ttk.Frame(root, style="Header.TFrame", padding=(28, 24))
+    header.grid(row=0, column=0, sticky="ew")
+    header.columnconfigure(0, weight=1)
 
-    instructions = (
-        "1. Choose a folder from the dropdown, or click Browse to pick another folder.\n"
-        "2. Leave Dry run checked first to preview where files will go without moving them.\n"
-        "3. Click Organize Folder and review the results below.\n"
-        "4. If the preview looks right, uncheck Dry run and click Organize Folder again.\n"
-        "5. Check Include nested folders only if you want to scan folders inside the selected folder too."
+    ttk.Label(header, text="Folder Organizer", style="Title.TLabel").grid(
+        row=0, column=0, sticky="w"
     )
-    instructions_label = ttk.Label(root, text=instructions, justify="left")
-    instructions_label.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 14))
+    ttk.Label(
+        header,
+        text="Sort loose files into clean folders in one careful pass.",
+        style="Subtitle.TLabel",
+    ).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
-    folder_frame = ttk.Frame(root)
-    folder_frame.grid(row=2, column=0, sticky="ew", padx=18, pady=4)
-    folder_frame.columnconfigure(1, weight=1)
+    content = ttk.Frame(root, style="App.TFrame", padding=(22, 20))
+    content.grid(row=1, column=0, sticky="ew")
+    content.columnconfigure(0, weight=1)
 
-    ttk.Label(folder_frame, text="Folder:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+    setup_panel = ttk.Frame(content, style="Panel.TFrame", padding=(20, 18))
+    setup_panel.grid(row=0, column=0, sticky="ew")
+    setup_panel.columnconfigure(1, weight=1)
+
+    ttk.Label(setup_panel, text="Select folder", style="PanelTitle.TLabel").grid(
+        row=0, column=0, columnspan=3, sticky="w"
+    )
+    ttk.Label(
+        setup_panel,
+        text="Pick a common folder from the dropdown or browse to another location.",
+        style="Muted.TLabel",
+    ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(3, 14))
+
+    ttk.Label(setup_panel, text="Folder:", background="#ffffff").grid(
+        row=2, column=0, sticky="w", padx=(0, 10)
+    )
     folder_combo = ttk.Combobox(
-        folder_frame,
+        setup_panel,
         textvariable=selected_folder,
         values=folder_choices,
         state="normal",
     )
-    folder_combo.grid(row=0, column=1, sticky="ew")
+    folder_combo.grid(row=2, column=1, sticky="ew", ipady=4)
 
     def browse_folder() -> None:
         chosen = filedialog.askdirectory(title="Choose a folder to organize")
@@ -291,34 +354,81 @@ def launch_gui() -> None:
         if chosen not in current_values:
             folder_combo["values"] = [chosen, *current_values]
 
-    ttk.Button(folder_frame, text="Browse...", command=browse_folder).grid(
-        row=0, column=2, sticky="e", padx=(8, 0)
+    ttk.Button(
+        setup_panel,
+        text="Browse...",
+        command=browse_folder,
+        style="Secondary.TButton",
+    ).grid(row=2, column=2, sticky="e", padx=(10, 0))
+
+    options_panel = ttk.Frame(root, style="App.TFrame", padding=(22, 0))
+    options_panel.grid(row=2, column=0, sticky="nsew")
+    options_panel.columnconfigure(0, weight=1)
+    options_panel.rowconfigure(1, weight=1)
+
+    choice_panel = ttk.Frame(options_panel, style="Panel.TFrame", padding=(20, 16))
+    choice_panel.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+    choice_panel.columnconfigure(2, weight=1)
+
+    ttk.Label(choice_panel, text="Run options", style="PanelTitle.TLabel").grid(
+        row=0, column=0, columnspan=3, sticky="w", pady=(0, 8)
     )
-
-    options_frame = ttk.Frame(root)
-    options_frame.grid(row=3, column=0, sticky="ew", padx=18, pady=8)
-
-    ttk.Checkbutton(options_frame, text="Dry run first", variable=dry_run_var).grid(
-        row=0, column=0, sticky="w", padx=(0, 18)
+    ttk.Checkbutton(choice_panel, text="Dry run first", variable=dry_run_var).grid(
+        row=1, column=0, sticky="w", padx=(0, 26)
     )
     ttk.Checkbutton(
-        options_frame,
+        choice_panel,
         text="Include nested folders",
         variable=recursive_var,
-    ).grid(row=0, column=1, sticky="w")
+    ).grid(row=1, column=1, sticky="w")
 
-    output = scrolledtext.ScrolledText(root, wrap="word", height=18)
-    output.grid(row=4, column=0, sticky="nsew", padx=18, pady=(4, 12))
+    results_panel = ttk.Frame(options_panel, style="Panel.TFrame", padding=(20, 16))
+    results_panel.grid(row=1, column=0, sticky="nsew")
+    results_panel.columnconfigure(0, weight=1)
+    results_panel.rowconfigure(1, weight=1)
+
+    ttk.Label(results_panel, text="Results", style="PanelTitle.TLabel").grid(
+        row=0, column=0, sticky="w", pady=(0, 10)
+    )
+
+    output = scrolledtext.ScrolledText(
+        results_panel,
+        wrap="word",
+        height=16,
+        borderwidth=0,
+        relief="flat",
+        bg="#f8fafc",
+        fg="#0f172a",
+        insertbackground="#0f172a",
+        font=("Consolas", 10),
+        padx=12,
+        pady=12,
+    )
+    output.tag_configure("preview", foreground="#1d4ed8")
+    output.tag_configure("moved", foreground="#047857")
+    output.tag_configure("error", foreground="#b91c1c")
+    output.tag_configure("summary", foreground="#111827", font=("Consolas", 10, "bold"))
+    output.grid(row=1, column=0, sticky="nsew")
     output.insert("end", "Results will appear here after you click Organize Folder.\n")
     output.configure(state="disabled")
 
-    button_frame = ttk.Frame(root)
-    button_frame.grid(row=5, column=0, sticky="ew", padx=18, pady=(0, 16))
+    button_frame = ttk.Frame(root, style="App.TFrame", padding=(22, 16))
+    button_frame.grid(row=3, column=0, sticky="ew")
     button_frame.columnconfigure(0, weight=1)
 
     def write_output(message: str) -> None:
+        tag = ""
+        if message.startswith("Would move:"):
+            tag = "preview"
+        elif message.startswith("Moved:") or message == "Organization complete.":
+            tag = "moved"
+        elif message.startswith("Error:"):
+            tag = "error"
+        elif message.endswith("file(s).") or message.startswith("Dry run"):
+            tag = "summary"
+
         output.configure(state="normal")
-        output.insert("end", message + "\n")
+        output.insert("end", message + "\n", tag)
         output.see("end")
         output.configure(state="disabled")
 
@@ -332,9 +442,13 @@ def launch_gui() -> None:
 
         if not folder.exists() or not folder.is_dir():
             messagebox.showerror("Invalid folder", f"Please choose a valid folder:\n{folder}")
+            status_var.set("Choose a valid folder before running.")
             return
 
         clear_output()
+        status_var.set("Scanning files...")
+        root.update_idletasks()
+
         try:
             moved = organize(
                 folder,
@@ -345,6 +459,7 @@ def launch_gui() -> None:
         except OSError as error:
             messagebox.showerror("Organizer error", str(error))
             write_output(f"Error: {error}")
+            status_var.set("Stopped because an error occurred.")
             return
 
         action = "Would move" if dry_run_var.get() else "Moved"
@@ -353,10 +468,20 @@ def launch_gui() -> None:
 
         if dry_run_var.get():
             write_output("Dry run was enabled, so no files were changed.")
+            status_var.set(f"Preview complete: {moved} file(s) found.")
         else:
             write_output("Organization complete.")
+            status_var.set(f"Done: moved {moved} file(s).")
 
-    ttk.Button(button_frame, text="Organize Folder", command=run_organizer).grid(
+    ttk.Label(button_frame, textvariable=status_var, style="Status.TLabel").grid(
+        row=0, column=0, sticky="w"
+    )
+    ttk.Button(
+        button_frame,
+        text="Organize Folder",
+        command=run_organizer,
+        style="Primary.TButton",
+    ).grid(
         row=0, column=1, sticky="e"
     )
 
@@ -394,6 +519,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    if len(sys.argv) == 1:
+        launch_gui()
+        return
+
     args = parse_args()
 
     if args.gui:

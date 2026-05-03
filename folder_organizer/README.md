@@ -3,12 +3,18 @@
 This tool organizes files into subfolders by file type, such as Images, Videos,
 Documents, Spreadsheets, Audio, Archives, Code, Fonts, and Other.
 
-## Use the GUI
+## Use the App
 
-Run this command from the `folder_organizer` folder:
+On Windows, double-click:
+
+```text
+Folder Organizer.bat
+```
+
+You can also run this command from the `folder_organizer` folder:
 
 ```bash
-python organize_files.py --gui
+python organize_files.py
 ```
 
 In the window:
@@ -21,6 +27,9 @@ In the window:
 
 Check **Include nested folders** if you also want to scan folders inside the
 selected folder.
+
+The app opens in dry-run mode by default so you can safely preview changes
+before moving anything.
 
 ## Use the Command Line
 
@@ -40,4 +49,10 @@ Scan nested folders too:
 
 ```bash
 python organize_files.py "C:\Users\you\Downloads" --recursive
+```
+
+Open the GUI explicitly:
+
+```bash
+python organize_files.py --gui
 ```
