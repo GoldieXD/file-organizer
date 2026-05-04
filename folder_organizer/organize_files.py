@@ -126,6 +126,14 @@ FILE_CATEGORIES = {
 INVALID_FOLDER_CHARS = re.compile(r'[<>:"/\\|?*]')
 
 
+def resource_path(filename: str) -> Path:
+    """Find bundled files when running from source or a PyInstaller app."""
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / filename
+
+    return Path(__file__).resolve().parent / filename
+
+
 @dataclass(frozen=True)
 class MovePlan:
     """A single planned file move."""
@@ -340,10 +348,13 @@ def common_folders() -> list[str]:
 def launch_gui() -> None:
     """Open a polished desktop GUI for choosing and organizing a folder."""
     root = tk.Tk()
-    root.title("Folder Organizer")
+    root.title("SmartSort v1.0")
     root.geometry("940x780")
     root.minsize(800, 680)
     root.configure(bg="#f4f7fb")
+    icon_path = resource_path("icon.ico")
+    if icon_path.exists():
+        root.iconbitmap(default=str(icon_path))
 
     style = ttk.Style(root)
     style.theme_use("clam")
@@ -409,12 +420,12 @@ def launch_gui() -> None:
     header.grid(row=0, column=0, sticky="ew")
     header.columnconfigure(0, weight=1)
 
-    ttk.Label(header, text="Folder Organizer", style="Title.TLabel").grid(
+    ttk.Label(header, text="SmartSort", style="Title.TLabel").grid(
         row=0, column=0, sticky="w"
     )
     ttk.Label(
         header,
-        text="Sort loose files into clean folders in one careful pass.",
+        text="v1.0 - Sort loose files into clean folders in one careful pass.",
         style="Subtitle.TLabel",
     ).grid(row=1, column=0, sticky="w", pady=(4, 0))
 

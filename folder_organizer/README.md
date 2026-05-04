@@ -1,4 +1,4 @@
-# Folder Organizer
+# SmartSort v1.0
 
 This tool organizes files into subfolders by file type, such as Images, Videos,
 Documents, Spreadsheets, Audio, Archives, Code, Fonts, and Other.
@@ -8,13 +8,13 @@ Documents, Spreadsheets, Audio, Archives, Code, Fonts, and Other.
 If you have the packaged version, double-click:
 
 ```text
-dist\Folder Organizer.exe
+dist\SmartSort.exe
 ```
 
 On Windows, double-click:
 
 ```text
-Folder Organizer.bat
+SmartSort.bat
 ```
 
 You can also run this command from the `folder_organizer` folder:
@@ -93,11 +93,11 @@ python -m pip install pyinstaller
 Build a single-file Windows app:
 
 ```bash
-python -m PyInstaller --onefile --windowed --name "Folder Organizer" organize_files.py
+python -m PyInstaller --onefile --windowed --name "SmartSort" organize_files.py
 ```
 
 The executable will be created at:
 
 ```text
-dist\Folder Organizer.exe
+dist\SmartSort.exe
 ```
