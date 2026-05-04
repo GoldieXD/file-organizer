@@ -9,6 +9,7 @@ import shutil
 import sys
 import tkinter as tk
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
@@ -125,6 +126,15 @@ FILE_CATEGORIES = {
 INVALID_FOLDER_CHARS = re.compile(r'[<>:"/\\|?*]')
 
 
+@dataclass(frozen=True)
+class MovePlan:
+    """A single planned file move."""
+
+    source: Path
+    category: str
+    destination: Path
+
+
 def get_category(file_path: Path) -> str:
     """Return the folder category for a file extension."""
     # suffix returns the file extension, such as ".jpg" or ".pdf".
@@ -172,10 +182,12 @@ def get_custom_category(file_path: Path, rules: dict[str, set[str]]) -> str:
     return "Other"
 
 
-def unique_destination(destination: Path) -> Path:
+def unique_destination(destination: Path, reserved: set[Path] | None = None) -> Path:
     """Return a non-conflicting path by appending a number when needed."""
+    reserved = reserved or set()
+
     # If there is no file with this name already, use the original name.
-    if not destination.exists():
+    if not destination.exists() and destination not in reserved:
         return destination
 
     # If a file already exists, keep trying names like:
@@ -187,7 +199,7 @@ def unique_destination(destination: Path) -> Path:
 
     while True:
         candidate = parent / f"{stem} ({counter}){suffix}"
-        if not candidate.exists():
+        if not candidate.exists() and candidate not in reserved:
             return candidate
         counter += 1
 
@@ -226,6 +238,55 @@ def iter_files(
     return files
 
 
+def build_move_plans(
+    folder: Path,
+    recursive: bool = False,
+    rules: dict[str, set[str]] | None = None,
+) -> list[MovePlan]:
+    """Build the exact file moves that preview/apply should display or run."""
+    reserved_destinations: set[Path] = set()
+    plans: list[MovePlan] = []
+
+    if rules is None:
+        category_names = set(FILE_CATEGORIES) | {"Other"}
+    else:
+        category_names = set(rules) | {"Other"}
+
+    for file_path in iter_files(folder, recursive, category_names=category_names):
+        if rules is None:
+            category = get_category(file_path)
+        else:
+            category = get_custom_category(file_path, rules)
+
+        target_folder = folder / category
+        destination = unique_destination(target_folder / file_path.name, reserved_destinations)
+        reserved_destinations.add(destination)
+        plans.append(MovePlan(file_path, category, destination))
+
+    return plans
+
+
+def execute_move_plans(
+    plans: list[MovePlan],
+    dry_run: bool = False,
+    log: Callable[[str], None] = print,
+) -> int:
+    """Preview or apply an already-built list of file moves."""
+    moved = 0
+
+    for plan in plans:
+        if dry_run:
+            log(f"Would move: {plan.source} -> {plan.destination}")
+        else:
+            plan.destination.parent.mkdir(exist_ok=True)
+            shutil.move(str(plan.source), str(plan.destination))
+            log(f"Moved: {plan.source} -> {plan.destination}")
+
+        moved += 1
+
+    return moved
+
+
 def organize(
     folder: Path,
     recursive: bool = False,
@@ -233,27 +294,7 @@ def organize(
     log: Callable[[str], None] = print,
 ) -> int:
     """Move files into category folders and return the number of moved files."""
-    moved = 0
-
-    for file_path in iter_files(folder, recursive):
-        category = get_category(file_path)
-        target_folder = folder / category
-        destination = unique_destination(target_folder / file_path.name)
-
-        # Dry run mode prints the planned move without changing any files.
-        if dry_run:
-            log(f"Would move: {file_path} -> {destination}")
-        else:
-            # Create the category folder if it does not already exist.
-            target_folder.mkdir(exist_ok=True)
-
-            # shutil.move works across folders and drives.
-            shutil.move(str(file_path), str(destination))
-            log(f"Moved: {file_path} -> {destination}")
-
-        moved += 1
-
-    return moved
+    return execute_move_plans(build_move_plans(folder, recursive), dry_run, log)
 
 
 def organize_with_custom_rules(
@@ -264,24 +305,11 @@ def organize_with_custom_rules(
     log: Callable[[str], None] = print,
 ) -> int:
     """Move files using user-created extension-to-folder rules."""
-    moved = 0
-    output_folder_names = set(rules) | {"Other"}
-
-    for file_path in iter_files(folder, recursive, category_names=output_folder_names):
-        category = get_custom_category(file_path, rules)
-        target_folder = folder / category
-        destination = unique_destination(target_folder / file_path.name)
-
-        if dry_run:
-            log(f"Would move: {file_path} -> {destination}")
-        else:
-            target_folder.mkdir(exist_ok=True)
-            shutil.move(str(file_path), str(destination))
-            log(f"Moved: {file_path} -> {destination}")
-
-        moved += 1
-
-    return moved
+    return execute_move_plans(
+        build_move_plans(folder, recursive, rules=rules),
+        dry_run,
+        log,
+    )
 
 
 def common_folders() -> list[str]:
@@ -372,6 +400,7 @@ def launch_gui() -> None:
     status_var = tk.StringVar(value="Ready. Preview files before applying changes.")
     custom_rules: dict[str, set[str]] = {}
     preview_signature: str | None = None
+    preview_plans: list[MovePlan] = []
 
     root.columnconfigure(0, weight=1)
     root.rowconfigure(2, weight=1)
@@ -529,8 +558,10 @@ def launch_gui() -> None:
         )
 
     def invalidate_preview(*_args: object) -> None:
-        nonlocal preview_signature
+        nonlocal preview_signature, preview_plans
         preview_signature = None
+        preview_plans = []
+        clear_preview_table()
         apply_button.configure(state="disabled")
         status_var.set("Preview needed before applying changes.")
 
@@ -591,15 +622,34 @@ def launch_gui() -> None:
     results_panel.grid(row=2, column=0, sticky="nsew")
     results_panel.columnconfigure(0, weight=1)
     results_panel.rowconfigure(1, weight=1)
+    results_panel.rowconfigure(3, weight=1)
 
-    ttk.Label(results_panel, text="Results", style="PanelTitle.TLabel").grid(
+    ttk.Label(results_panel, text="Preview", style="PanelTitle.TLabel").grid(
         row=0, column=0, sticky="w", pady=(0, 10)
+    )
+
+    preview_table = ttk.Treeview(
+        results_panel,
+        columns=("file", "folder", "destination"),
+        show="headings",
+        height=8,
+    )
+    preview_table.heading("file", text="File that will change")
+    preview_table.heading("folder", text="Going into folder")
+    preview_table.heading("destination", text="Final filename")
+    preview_table.column("file", width=360, anchor="w")
+    preview_table.column("folder", width=180, anchor="w")
+    preview_table.column("destination", width=260, anchor="w")
+    preview_table.grid(row=1, column=0, sticky="nsew")
+
+    ttk.Label(results_panel, text="Activity log", style="PanelTitle.TLabel").grid(
+        row=2, column=0, sticky="w", pady=(14, 10)
     )
 
     output = scrolledtext.ScrolledText(
         results_panel,
         wrap="word",
-        height=16,
+        height=8,
         borderwidth=0,
         relief="flat",
         bg="#f8fafc",
@@ -613,7 +663,7 @@ def launch_gui() -> None:
     output.tag_configure("moved", foreground="#047857")
     output.tag_configure("error", foreground="#b91c1c")
     output.tag_configure("summary", foreground="#111827", font=("Consolas", 10, "bold"))
-    output.grid(row=1, column=0, sticky="nsew")
+    output.grid(row=3, column=0, sticky="nsew")
     output.insert("end", "Preview results will appear here before anything is moved.\n")
     output.configure(state="disabled")
 
@@ -642,8 +692,26 @@ def launch_gui() -> None:
         output.delete("1.0", "end")
         output.configure(state="disabled")
 
+    def clear_preview_table() -> None:
+        for item in preview_table.get_children():
+            preview_table.delete(item)
+
+    def show_preview_table(folder: Path, plans: list[MovePlan]) -> None:
+        clear_preview_table()
+
+        for plan in plans:
+            preview_table.insert(
+                "",
+                "end",
+                values=(
+                    str(plan.source.relative_to(folder)),
+                    plan.category,
+                    plan.destination.name,
+                ),
+            )
+
     def run_organizer(dry_run: bool) -> None:
-        nonlocal preview_signature
+        nonlocal preview_signature, preview_plans
         folder = Path(selected_folder.get()).expanduser().resolve()
 
         if not folder.exists() or not folder.is_dir():
@@ -673,21 +741,13 @@ def launch_gui() -> None:
         root.update_idletasks()
 
         try:
-            if mode_var.get() == "custom":
-                moved = organize_with_custom_rules(
-                    folder,
-                    custom_rules,
-                    recursive=recursive_var.get(),
-                    dry_run=dry_run,
-                    log=write_output,
-                )
+            if dry_run:
+                rules = custom_rules if mode_var.get() == "custom" else None
+                plans = build_move_plans(folder, recursive=recursive_var.get(), rules=rules)
             else:
-                moved = organize(
-                    folder,
-                    recursive=recursive_var.get(),
-                    dry_run=dry_run,
-                    log=write_output,
-                )
+                plans = preview_plans
+
+            moved = execute_move_plans(plans, dry_run=dry_run, log=write_output)
         except OSError as error:
             messagebox.showerror("Organizer error", str(error))
             write_output(f"Error: {error}")
@@ -700,12 +760,16 @@ def launch_gui() -> None:
 
         if dry_run:
             preview_signature = signature
+            preview_plans = plans
+            show_preview_table(folder, preview_plans)
             apply_button.configure(state="normal")
             write_output("Preview complete. No files were changed.")
             status_var.set(f"Preview complete: {moved} file(s) found.")
         else:
+            show_preview_table(folder, preview_plans)
             write_output("Organization complete.")
             preview_signature = None
+            preview_plans = []
             apply_button.configure(state="disabled")
             status_var.set(f"Done: moved {moved} file(s).")
 
