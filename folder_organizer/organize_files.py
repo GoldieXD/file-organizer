@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 import tkinter as tk
@@ -121,6 +122,9 @@ FILE_CATEGORIES = {
 }
 
 
+INVALID_FOLDER_CHARS = re.compile(r'[<>:"/\\|?*]')
+
+
 def get_category(file_path: Path) -> str:
     """Return the folder category for a file extension."""
     # suffix returns the file extension, such as ".jpg" or ".pdf".
@@ -133,6 +137,38 @@ def get_category(file_path: Path) -> str:
             return category
 
     # Anything not listed above gets placed in the "Other" folder.
+    return "Other"
+
+
+def clean_folder_name(folder_name: str) -> str:
+    """Return a Windows-safe folder name."""
+    cleaned = INVALID_FOLDER_CHARS.sub("-", folder_name).strip().strip(".")
+    return cleaned or "Other"
+
+
+def parse_extensions(raw_extensions: str) -> set[str]:
+    """Convert user input like '.jpg, png txt' into normalized extensions."""
+    extensions: set[str] = set()
+
+    for item in re.split(r"[\s,;]+", raw_extensions.lower()):
+        item = item.strip()
+        if not item:
+            continue
+        if not item.startswith("."):
+            item = f".{item}"
+        extensions.add(item)
+
+    return extensions
+
+
+def get_custom_category(file_path: Path, rules: dict[str, set[str]]) -> str:
+    """Return the custom folder name for a file based on extension rules."""
+    extension = file_path.suffix.lower()
+
+    for folder_name, extensions in rules.items():
+        if extension in extensions:
+            return folder_name
+
     return "Other"
 
 
@@ -156,10 +192,14 @@ def unique_destination(destination: Path) -> Path:
         counter += 1
 
 
-def iter_files(folder: Path, recursive: bool) -> list[Path]:
+def iter_files(
+    folder: Path,
+    recursive: bool,
+    category_names: set[str] | None = None,
+) -> list[Path]:
     """Collect files to organize, skipping already-created category folders."""
     # Used to avoid reorganizing files that are already inside output folders.
-    category_names = set(FILE_CATEGORIES) | {"Other"}
+    output_folder_names = category_names or (set(FILE_CATEGORIES) | {"Other"})
 
     # "*" scans only the selected folder.
     # "**/*" scans the selected folder and all folders inside it.
@@ -178,7 +218,7 @@ def iter_files(folder: Path, recursive: bool) -> list[Path]:
 
         # When running recursively, skip files that are already inside category
         # folders such as Images, Videos, Documents, or Other.
-        if any(part in category_names for part in path.relative_to(folder).parts[:-1]):
+        if any(part in output_folder_names for part in path.relative_to(folder).parts[:-1]):
             continue
 
         files.append(path)
@@ -216,6 +256,34 @@ def organize(
     return moved
 
 
+def organize_with_custom_rules(
+    folder: Path,
+    rules: dict[str, set[str]],
+    recursive: bool = False,
+    dry_run: bool = False,
+    log: Callable[[str], None] = print,
+) -> int:
+    """Move files using user-created extension-to-folder rules."""
+    moved = 0
+    output_folder_names = set(rules) | {"Other"}
+
+    for file_path in iter_files(folder, recursive, category_names=output_folder_names):
+        category = get_custom_category(file_path, rules)
+        target_folder = folder / category
+        destination = unique_destination(target_folder / file_path.name)
+
+        if dry_run:
+            log(f"Would move: {file_path} -> {destination}")
+        else:
+            target_folder.mkdir(exist_ok=True)
+            shutil.move(str(file_path), str(destination))
+            log(f"Moved: {file_path} -> {destination}")
+
+        moved += 1
+
+    return moved
+
+
 def common_folders() -> list[str]:
     """Return useful folder choices for the GUI dropdown."""
     home = Path.home()
@@ -245,8 +313,8 @@ def launch_gui() -> None:
     """Open a polished desktop GUI for choosing and organizing a folder."""
     root = tk.Tk()
     root.title("Folder Organizer")
-    root.geometry("900x680")
-    root.minsize(760, 560)
+    root.geometry("940x780")
+    root.minsize(800, 680)
     root.configure(bg="#f4f7fb")
 
     style = ttk.Style(root)
@@ -276,6 +344,7 @@ def launch_gui() -> None:
     style.configure("Muted.TLabel", background="#ffffff", foreground="#64748b")
     style.configure("Status.TLabel", background="#f4f7fb", foreground="#475569")
     style.configure("TCheckbutton", background="#ffffff", foreground="#1f2937")
+    style.configure("TRadiobutton", background="#ffffff", foreground="#1f2937")
     style.configure("TCombobox", fieldbackground="#ffffff", background="#ffffff")
     style.configure(
         "Primary.TButton",
@@ -296,9 +365,13 @@ def launch_gui() -> None:
 
     folder_choices = common_folders()
     selected_folder = tk.StringVar(value=folder_choices[0] if folder_choices else str(Path.cwd()))
-    dry_run_var = tk.BooleanVar(value=True)
     recursive_var = tk.BooleanVar(value=False)
-    status_var = tk.StringVar(value="Ready. Choose a folder and preview the changes first.")
+    mode_var = tk.StringVar(value="default")
+    extension_var = tk.StringVar()
+    custom_folder_var = tk.StringVar()
+    status_var = tk.StringVar(value="Ready. Preview files before applying changes.")
+    custom_rules: dict[str, set[str]] = {}
+    preview_signature: str | None = None
 
     root.columnconfigure(0, weight=1)
     root.rowconfigure(2, weight=1)
@@ -353,6 +426,7 @@ def launch_gui() -> None:
         current_values = list(folder_combo["values"])
         if chosen not in current_values:
             folder_combo["values"] = [chosen, *current_values]
+        invalidate_preview()
 
     ttk.Button(
         setup_panel,
@@ -364,7 +438,7 @@ def launch_gui() -> None:
     options_panel = ttk.Frame(root, style="App.TFrame", padding=(22, 0))
     options_panel.grid(row=2, column=0, sticky="nsew")
     options_panel.columnconfigure(0, weight=1)
-    options_panel.rowconfigure(1, weight=1)
+    options_panel.rowconfigure(2, weight=1)
 
     choice_panel = ttk.Frame(options_panel, style="Panel.TFrame", padding=(20, 16))
     choice_panel.grid(row=0, column=0, sticky="ew", pady=(0, 16))
@@ -373,17 +447,148 @@ def launch_gui() -> None:
     ttk.Label(choice_panel, text="Run options", style="PanelTitle.TLabel").grid(
         row=0, column=0, columnspan=3, sticky="w", pady=(0, 8)
     )
-    ttk.Checkbutton(choice_panel, text="Dry run first", variable=dry_run_var).grid(
-        row=1, column=0, sticky="w", padx=(0, 26)
-    )
     ttk.Checkbutton(
         choice_panel,
         text="Include nested folders",
         variable=recursive_var,
+    ).grid(row=1, column=0, sticky="w")
+
+    mode_panel = ttk.Frame(options_panel, style="Panel.TFrame", padding=(20, 16))
+    mode_panel.grid(row=1, column=0, sticky="ew", pady=(0, 16))
+    mode_panel.columnconfigure(1, weight=1)
+
+    ttk.Label(mode_panel, text="Organization mode", style="PanelTitle.TLabel").grid(
+        row=0, column=0, columnspan=4, sticky="w", pady=(0, 8)
+    )
+    ttk.Radiobutton(
+        mode_panel,
+        text="Default file-type folders",
+        value="default",
+        variable=mode_var,
+    ).grid(row=1, column=0, sticky="w", padx=(0, 28))
+    ttk.Radiobutton(
+        mode_panel,
+        text="Custom extension rules",
+        value="custom",
+        variable=mode_var,
     ).grid(row=1, column=1, sticky="w")
 
+    rule_frame = ttk.Frame(mode_panel, style="Panel.TFrame")
+    rule_frame.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(14, 0))
+    rule_frame.columnconfigure(1, weight=1)
+    rule_frame.columnconfigure(3, weight=1)
+
+    ttk.Label(rule_frame, text="Files ending in:", background="#ffffff").grid(
+        row=0, column=0, sticky="w", padx=(0, 8)
+    )
+    extension_entry = ttk.Entry(rule_frame, textvariable=extension_var)
+    extension_entry.grid(row=0, column=1, sticky="ew", ipady=3, padx=(0, 12))
+
+    ttk.Label(rule_frame, text="go into folder:", background="#ffffff").grid(
+        row=0, column=2, sticky="w", padx=(0, 8)
+    )
+    folder_entry = ttk.Entry(rule_frame, textvariable=custom_folder_var)
+    folder_entry.grid(row=0, column=3, sticky="ew", ipady=3, padx=(0, 12))
+
+    rules_table = ttk.Treeview(
+        mode_panel,
+        columns=("extensions", "folder"),
+        show="headings",
+        height=4,
+    )
+    rules_table.heading("extensions", text="File endings")
+    rules_table.heading("folder", text="Folder")
+    rules_table.column("extensions", width=380, anchor="w")
+    rules_table.column("folder", width=220, anchor="w")
+    rules_table.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+
+    def refresh_rules_table() -> None:
+        for item in rules_table.get_children():
+            rules_table.delete(item)
+
+        for folder_name, extensions in custom_rules.items():
+            rules_table.insert(
+                "",
+                "end",
+                values=(", ".join(sorted(extensions)), folder_name),
+            )
+
+    def current_signature() -> str:
+        """Track the setup that was previewed before applying changes."""
+        normalized_rules = tuple(
+            (folder_name, tuple(sorted(extensions)))
+            for folder_name, extensions in sorted(custom_rules.items())
+        )
+        return repr(
+            (
+                str(Path(selected_folder.get()).expanduser().resolve()),
+                recursive_var.get(),
+                mode_var.get(),
+                normalized_rules,
+            )
+        )
+
+    def invalidate_preview(*_args: object) -> None:
+        nonlocal preview_signature
+        preview_signature = None
+        apply_button.configure(state="disabled")
+        status_var.set("Preview needed before applying changes.")
+
+    def add_rule() -> None:
+        extensions = parse_extensions(extension_var.get())
+        folder_name = clean_folder_name(custom_folder_var.get())
+
+        if not extensions:
+            messagebox.showerror(
+                "Missing file endings",
+                "Enter at least one file ending, such as .jpg or pdf.",
+            )
+            return
+
+        if not custom_folder_var.get().strip():
+            messagebox.showerror(
+                "Missing folder name",
+                "Enter the folder name for these files.",
+            )
+            return
+
+        custom_rules.setdefault(folder_name, set()).update(extensions)
+        extension_var.set("")
+        custom_folder_var.set("")
+        mode_var.set("custom")
+        refresh_rules_table()
+        invalidate_preview()
+        status_var.set(f"Added custom rule for {folder_name}.")
+
+    def remove_selected_rule() -> None:
+        selected_items = rules_table.selection()
+        if not selected_items:
+            status_var.set("Select a custom rule to remove.")
+            return
+
+        for item in selected_items:
+            folder_name = rules_table.item(item, "values")[1]
+            custom_rules.pop(folder_name, None)
+
+        refresh_rules_table()
+        invalidate_preview()
+        status_var.set("Removed selected custom rule.")
+
+    ttk.Button(
+        rule_frame,
+        text="Add rule",
+        command=add_rule,
+        style="Secondary.TButton",
+    ).grid(row=0, column=4, sticky="e")
+    ttk.Button(
+        mode_panel,
+        text="Remove selected rule",
+        command=remove_selected_rule,
+        style="Secondary.TButton",
+    ).grid(row=4, column=0, sticky="w", pady=(10, 0))
+
     results_panel = ttk.Frame(options_panel, style="Panel.TFrame", padding=(20, 16))
-    results_panel.grid(row=1, column=0, sticky="nsew")
+    results_panel.grid(row=2, column=0, sticky="nsew")
     results_panel.columnconfigure(0, weight=1)
     results_panel.rowconfigure(1, weight=1)
 
@@ -409,7 +614,7 @@ def launch_gui() -> None:
     output.tag_configure("error", foreground="#b91c1c")
     output.tag_configure("summary", foreground="#111827", font=("Consolas", 10, "bold"))
     output.grid(row=1, column=0, sticky="nsew")
-    output.insert("end", "Results will appear here after you click Organize Folder.\n")
+    output.insert("end", "Preview results will appear here before anything is moved.\n")
     output.configure(state="disabled")
 
     button_frame = ttk.Frame(root, style="App.TFrame", padding=(22, 16))
@@ -424,7 +629,7 @@ def launch_gui() -> None:
             tag = "moved"
         elif message.startswith("Error:"):
             tag = "error"
-        elif message.endswith("file(s).") or message.startswith("Dry run"):
+        elif message.endswith("file(s).") or message.startswith("Preview"):
             tag = "summary"
 
         output.configure(state="normal")
@@ -437,7 +642,8 @@ def launch_gui() -> None:
         output.delete("1.0", "end")
         output.configure(state="disabled")
 
-    def run_organizer() -> None:
+    def run_organizer(dry_run: bool) -> None:
+        nonlocal preview_signature
         folder = Path(selected_folder.get()).expanduser().resolve()
 
         if not folder.exists() or not folder.is_dir():
@@ -445,32 +651,62 @@ def launch_gui() -> None:
             status_var.set("Choose a valid folder before running.")
             return
 
+        if mode_var.get() == "custom" and not custom_rules:
+            messagebox.showerror(
+                "No custom rules",
+                "Add at least one custom rule, or switch back to default file-type folders.",
+            )
+            status_var.set("Add a custom rule before running custom mode.")
+            return
+
+        signature = current_signature()
+        if not dry_run and signature != preview_signature:
+            messagebox.showerror(
+                "Preview required",
+                "Preview the current setup before applying changes.",
+            )
+            status_var.set("Preview needed before applying changes.")
+            return
+
         clear_output()
-        status_var.set("Scanning files...")
+        status_var.set("Previewing files..." if dry_run else "Applying changes...")
         root.update_idletasks()
 
         try:
-            moved = organize(
-                folder,
-                recursive=recursive_var.get(),
-                dry_run=dry_run_var.get(),
-                log=write_output,
-            )
+            if mode_var.get() == "custom":
+                moved = organize_with_custom_rules(
+                    folder,
+                    custom_rules,
+                    recursive=recursive_var.get(),
+                    dry_run=dry_run,
+                    log=write_output,
+                )
+            else:
+                moved = organize(
+                    folder,
+                    recursive=recursive_var.get(),
+                    dry_run=dry_run,
+                    log=write_output,
+                )
         except OSError as error:
             messagebox.showerror("Organizer error", str(error))
             write_output(f"Error: {error}")
             status_var.set("Stopped because an error occurred.")
             return
 
-        action = "Would move" if dry_run_var.get() else "Moved"
+        action = "Would move" if dry_run else "Moved"
         write_output("")
         write_output(f"{action} {moved} file(s).")
 
-        if dry_run_var.get():
-            write_output("Dry run was enabled, so no files were changed.")
+        if dry_run:
+            preview_signature = signature
+            apply_button.configure(state="normal")
+            write_output("Preview complete. No files were changed.")
             status_var.set(f"Preview complete: {moved} file(s) found.")
         else:
             write_output("Organization complete.")
+            preview_signature = None
+            apply_button.configure(state="disabled")
             status_var.set(f"Done: moved {moved} file(s).")
 
     ttk.Label(button_frame, textvariable=status_var, style="Status.TLabel").grid(
@@ -478,12 +714,22 @@ def launch_gui() -> None:
     )
     ttk.Button(
         button_frame,
-        text="Organize Folder",
-        command=run_organizer,
+        text="Preview Files",
+        command=lambda: run_organizer(dry_run=True),
+        style="Secondary.TButton",
+    ).grid(row=0, column=1, sticky="e", padx=(0, 10))
+    apply_button = ttk.Button(
+        button_frame,
+        text="Apply Changes",
+        command=lambda: run_organizer(dry_run=False),
         style="Primary.TButton",
-    ).grid(
-        row=0, column=1, sticky="e"
     )
+    apply_button.grid(row=0, column=2, sticky="e")
+    apply_button.configure(state="disabled")
+
+    selected_folder.trace_add("write", invalidate_preview)
+    recursive_var.trace_add("write", invalidate_preview)
+    mode_var.trace_add("write", invalidate_preview)
 
     root.mainloop()
 
